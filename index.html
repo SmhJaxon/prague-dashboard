@@ -18,7 +18,8 @@
 const storeKey='prague-dashboard-v1';
 let data={};try{data=JSON.parse(localStorage.getItem(storeKey)||'{}')}catch{}
 const dirtyDays=new Set(JSON.parse(localStorage.getItem('dashboard-dirty-days')||'[]')),dirtyHealthDays=new Set(JSON.parse(localStorage.getItem('dashboard-dirty-health')||'[]'));let cloudNeedsSync=false;
-const saveDirty=()=>{localStorage.setItem('dashboard-dirty-days',JSON.stringify([...dirtyDays]));localStorage.setItem('dashboard-dirty-health',JSON.stringify([...dirtyHealthDays]))};const markDirty=(date,health=false)=>{dirtyDays.add(date);if(health)dirtyHealthDays.add(date);saveDirty()};
+const dayRevisions=new Map();const bumpRevision=date=>dayRevisions.set(date,(dayRevisions.get(date)||0)+1);
+const saveDirty=()=>{localStorage.setItem('dashboard-dirty-days',JSON.stringify([...dirtyDays]));localStorage.setItem('dashboard-dirty-health',JSON.stringify([...dirtyHealthDays]))};const markDirty=(date,health=false)=>{bumpRevision(date);dirtyDays.add(date);if(health)dirtyHealthDays.add(date);saveDirty()};
 const persist=()=>{localStorage.setItem(storeKey,JSON.stringify(data));scheduleCloudSync()};
 const safe=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const localToday=()=>localDayOf(new Date());
@@ -146,15 +147,15 @@ async function syncCloud(){
   snap.forEach(doc=>{if(/^\d{4}-\d{2}-\d{2}$/.test(doc.id))remote[doc.id]={...(doc.data().journal||{}),...(doc.data().health?{health:{...(doc.data().journal?.health||{}),...doc.data().health}}:{})}});
   const dates=new Set([...Object.keys(remote),...Object.keys(data)]);
   for(const date of dates){
-   const local=data[date],server=remote[date];
-   if(!local){data[date]=server;continue}
-   if(!server){await ref.doc(date).set({journal:local,...(local.health?{health:local.health}:{}),updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});dirtyDays.delete(date);continue}
+   const local=data[date],server=remote[date],revision=dayRevisions.get(date)||0;
+   if(!local){if(dirtyDays.has(date)){await ref.doc(date).set({journal:{food:[]},updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});if((dayRevisions.get(date)||0)===revision){dirtyDays.delete(date);dirtyHealthDays.delete(date)}else cloudNeedsSync=true;}else if(server)data[date]=server;continue}
+   if(!server){await ref.doc(date).set({journal:local,...(local.health?{health:local.health}:{}),updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});if((dayRevisions.get(date)||0)===revision){dirtyDays.delete(date);dirtyHealthDays.delete(date)}else cloudNeedsSync=true;continue}
    if(!dirtyDays.has(date)){data[date]=server;continue}
    const merged={...server,...local,health:{...(server.health||{}),...(local.health||{})}};
    // Steps from a Shortcut may be newer than an older local browser copy.
    if(!dirtyHealthDays.has(date)&&server.health?.steps!==undefined){merged.health.steps=server.health.steps;merged.steps=String(server.health.steps)}
    await ref.doc(date).set({journal:merged,health:merged.health,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
-   data[date]=merged;dirtyDays.delete(date);dirtyHealthDays.delete(date);
+   if((dayRevisions.get(date)||0)===revision){data[date]=merged;dirtyDays.delete(date);dirtyHealthDays.delete(date)}else cloudNeedsSync=true;
   }
   localStorage.setItem(storeKey,JSON.stringify(data));saveDirty();render();cloudSay('Synced '+Object.keys(data).length+' day(s) to your private cloud.');
  }catch(e){cloudSay('Sync failed: '+e.message);throw e}
@@ -189,7 +190,7 @@ healthConfirm.onclick=async()=>{
     // Update the specific field without replacing the rest of the day or its food journal.
     await cloudDb.collection('users').doc(cloudUser.uid).collection('days').doc(date)
       .set({health:{steps},updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
-    data[date]??={};data[date].health={...(data[date].health||{}),steps};data[date].steps=String(steps);dirtyDays.delete(date);dirtyHealthDays.delete(date);
+    data[date]??={};data[date].health={...(data[date].health||{}),steps};data[date].steps=String(steps);markDirty(date,true);
     localStorage.setItem(storeKey,JSON.stringify(data));
     chosen=date;render();
     pendingHealthImport=null;healthConfirm.hidden=true;healthCancel.hidden=true;
