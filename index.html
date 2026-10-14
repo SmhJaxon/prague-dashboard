@@ -73,6 +73,7 @@ document.getElementById('importMeal').onclick=()=>{
  }
  data[chosen]??={};data[chosen].food??=[];
  data[chosen].food.push({type:type[0].toUpperCase()+type.slice(1).toLowerCase(),name,calories:nums[0],protein:nums[1],carbs:nums[2],fat:nums[3],notes:'Estimated from ChatGPT meal photo'});
+ markDirty(chosen);
  persist();document.getElementById('mealImport').value='';render();status.textContent='Meal added to '+chosen+'.';
 };
 
