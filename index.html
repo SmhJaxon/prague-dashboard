@@ -171,6 +171,24 @@ async function syncGoals(){
 const GOOGLE_CLIENT_ID='623055844423-7muorssm8u2294et36pq5r5vnko9hq70.apps.googleusercontent.com';
 const CALENDAR_SCOPE='https://www.googleapis.com/auth/calendar.readonly';
 let googleTokenClient=null, googleAccessToken=null, calendarRequestId=0;let silentCalendarAttempted=false;
+// Keep short-lived Google access in this browser tab across refreshes only.
+// Never store refresh tokens or Google passwords in browser storage.
+const calendarTokenKey='prague-calendar-session-v1';
+function rememberCalendarToken(response){
+ if(!response?.access_token)return false;
+ googleAccessToken=response.access_token;
+ const seconds=Math.max(0,Number(response.expires_in)||3600);
+ try{sessionStorage.setItem(calendarTokenKey,JSON.stringify({token:googleAccessToken,expires:Date.now()+seconds*1000}));}catch{}
+ calendarConnected(true);loadCalendarEvents();return true;
+}
+function restoreCalendarToken(){
+ try{const saved=JSON.parse(sessionStorage.getItem(calendarTokenKey)||'null');
+  if(saved?.token&&saved.expires>Date.now()+60000){googleAccessToken=saved.token;calendarConnected(true);loadCalendarEvents();return true;}
+  sessionStorage.removeItem(calendarTokenKey);
+ }catch{}return false;
+}
+function clearCalendarToken(){googleAccessToken=null;try{sessionStorage.removeItem(calendarTokenKey)}catch{}}
+
 window.calendarSessionActive=false;
 const calendarStatus=document.getElementById('calendarStatus');
 const calendarEvents=document.getElementById('calendarEvents');
@@ -184,7 +202,7 @@ async function googleApi(url){const response=await fetch(url,{headers:{Authoriza
 async function googleApiAll(url){let next='',out=[];do{const page=await googleApi(url+(url.includes('?')?'&':'?')+'maxResults=250'+(next?'&pageToken='+encodeURIComponent(next):''));out.push(...(page.items||[]));next=page.nextPageToken||''}while(next);return out}
 function eventOnSelectedDay(event){if(event.start?.date)return event.start.date<=chosen&&(event.end?.date||event.start.date)>chosen;const start=event.start?.dateTime,end=event.end?.dateTime;if(!start)return false;const eventDay=localDayOf(new Date(start));if(eventDay===chosen)return true;if(end){const endDay=localDayOf(new Date(new Date(end).getTime()-1));return eventDay<chosen&&endDay>=chosen}return false}
 function eventTime(event){if(event.start?.date)return 'All day';const start=new Date(event.start.dateTime),end=event.end?.dateTime?new Date(event.end.dateTime):null;const formatter=new Intl.DateTimeFormat('en-US',{hour:'numeric',minute:'2-digit',hour12:true});return formatter.format(start)+(end?' – '+formatter.format(end):'')}
-async function loadCalendarEvents(){if(!googleAccessToken)return;const id=++calendarRequestId;calendarMessage('Loading events for '+chosen+'…');calendarEvents.replaceChildren();try{const calendars=await googleApiAll('https://www.googleapis.com/calendar/v3/users/me/calendarList?showHidden=false');if(id!==calendarRequestId)return;const enabled=calendars.filter(c=>c.selected!==false&&c.accessRole!=='none');const min=new Date(parseDay(chosen).getTime()-2*86400000).toISOString(),max=new Date(parseDay(chosen).getTime()+2*86400000).toISOString();const results=await Promise.all(enabled.map(async cal=>{const params=new URLSearchParams({timeMin:min,timeMax:max,singleEvents:'true',orderBy:'startTime',showDeleted:'false',maxResults:'250'});const events=await googleApiAll('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(cal.id)+'/events?'+params.toString());return events.filter(eventOnSelectedDay).map(event=>({event,calendar:cal.summary||'Google Calendar'}))}));if(id!==calendarRequestId)return;const events=results.flat().sort((a,b)=>new Date(a.event.start?.dateTime||a.event.start?.date||chosen)-new Date(b.event.start?.dateTime||b.event.start?.date||chosen));calendarMessage('Connected · '+enabled.length+' calendar'+(enabled.length===1?'':'s')+' · '+events.length+' event'+(events.length===1?'':'s')+' on '+chosen);if(!events.length){const p=document.createElement('p');p.className='muted';p.textContent='No events found on this date.';calendarEvents.appendChild(p)}for(const {event,calendar} of events){const box=document.createElement('div');box.className='calendar-event';const title=document.createElement('strong');title.textContent=event.summary||'(Untitled event)';const detail=document.createElement('small');detail.textContent=eventTime(event)+' · '+calendar;box.append(title,detail);if(event.location){const loc=document.createElement('small');loc.textContent=event.location;box.appendChild(loc)}calendarEvents.appendChild(box)}makeCalendarTasks(chosen,events);renderUpcoming();}catch(error){if(id!==calendarRequestId)return;if(error.status===401){googleAccessToken=null;calendarConnected(false);calendarMessage('Your Google session expired. Click Connect Google Calendar to sign in again.')}else{calendarMessage('Could not load calendars: '+error.message)}}}
+async function loadCalendarEvents(){if(!googleAccessToken)return;const id=++calendarRequestId;calendarMessage('Loading events for '+chosen+'…');calendarEvents.replaceChildren();try{const calendars=await googleApiAll('https://www.googleapis.com/calendar/v3/users/me/calendarList?showHidden=false');if(id!==calendarRequestId)return;const enabled=calendars.filter(c=>c.selected!==false&&c.accessRole!=='none');const min=new Date(parseDay(chosen).getTime()-2*86400000).toISOString(),max=new Date(parseDay(chosen).getTime()+2*86400000).toISOString();const results=await Promise.all(enabled.map(async cal=>{const params=new URLSearchParams({timeMin:min,timeMax:max,singleEvents:'true',orderBy:'startTime',showDeleted:'false',maxResults:'250'});const events=await googleApiAll('https://www.googleapis.com/calendar/v3/calendars/'+encodeURIComponent(cal.id)+'/events?'+params.toString());return events.filter(eventOnSelectedDay).map(event=>({event,calendar:cal.summary||'Google Calendar'}))}));if(id!==calendarRequestId)return;const events=results.flat().sort((a,b)=>new Date(a.event.start?.dateTime||a.event.start?.date||chosen)-new Date(b.event.start?.dateTime||b.event.start?.date||chosen));calendarMessage('Connected · '+enabled.length+' calendar'+(enabled.length===1?'':'s')+' · '+events.length+' event'+(events.length===1?'':'s')+' on '+chosen);if(!events.length){const p=document.createElement('p');p.className='muted';p.textContent='No events found on this date.';calendarEvents.appendChild(p)}for(const {event,calendar} of events){const box=document.createElement('div');box.className='calendar-event';const title=document.createElement('strong');title.textContent=event.summary||'(Untitled event)';const detail=document.createElement('small');detail.textContent=eventTime(event)+' · '+calendar;box.append(title,detail);if(event.location){const loc=document.createElement('small');loc.textContent=event.location;box.appendChild(loc)}calendarEvents.appendChild(box)}makeCalendarTasks(chosen,events);renderUpcoming();}catch(error){if(id!==calendarRequestId)return;if(error.status===401){clearCalendarToken();calendarConnected(false);calendarMessage('Your Google session expired. Click Connect Google Calendar to sign in again.')}else{calendarMessage('Could not load calendars: '+error.message)}}}
 
 async function trySilentCalendar(){
  if(silentCalendarAttempted||googleAccessToken)return;
@@ -192,14 +210,14 @@ async function trySilentCalendar(){
  try{
   await ensureGoogleIdentity();
   const client=google.accounts.oauth2.initTokenClient({client_id:GOOGLE_CLIENT_ID,scope:CALENDAR_SCOPE,
-   callback:r=>{if(r.access_token){googleAccessToken=r.access_token;calendarConnected(true);loadCalendarEvents()}else calendarMessage('Click Connect Google Calendar to authorize access.')},
-   error_callback:()=>calendarMessage('Click Connect Google Calendar to reconnect.')});
+   callback:r=>{if(rememberCalendarToken(r)){}else calendarMessage('Click Connect Google Calendar to authorize access.')},
+   error_callback:()=>calendarMessage('Google requires you to reconnect. Click Connect Google Calendar.')});
   client.requestAccessToken({prompt:''});
  }catch(e){calendarMessage('Click Connect Google Calendar to connect.')}
 }
 
-connectCalendarButton.onclick=async()=>{connectCalendarButton.disabled=true;calendarMessage('Opening Google sign-in…');try{await ensureGoogleIdentity();googleTokenClient=google.accounts.oauth2.initTokenClient({client_id:GOOGLE_CLIENT_ID,scope:CALENDAR_SCOPE,callback:response=>{connectCalendarButton.disabled=false;if(response.error||!response.access_token){calendarMessage('Google sign-in did not complete: '+(response.error||'No access token'));return}googleAccessToken=response.access_token;calendarConnected(true);loadCalendarEvents()},error_callback:()=>{connectCalendarButton.disabled=false;calendarMessage('Google sign-in was cancelled or blocked. Try again.')}});googleTokenClient.requestAccessToken({prompt:'consent'})}catch(error){connectCalendarButton.disabled=false;calendarMessage(error.message)}};
-disconnectCalendarButton.onclick=()=>{++calendarRequestId;const token=googleAccessToken;googleAccessToken=null;if(token&&window.google?.accounts?.oauth2)google.accounts.oauth2.revoke(token,()=>{});calendarConnected(false);calendarEvents.replaceChildren();renderUpcoming();calendarMessage('Disconnected. Events were not saved on this website.')};
+connectCalendarButton.onclick=async()=>{connectCalendarButton.disabled=true;calendarMessage('Opening Google sign-in…');try{await ensureGoogleIdentity();googleTokenClient=google.accounts.oauth2.initTokenClient({client_id:GOOGLE_CLIENT_ID,scope:CALENDAR_SCOPE,callback:response=>{connectCalendarButton.disabled=false;if(response.error||!response.access_token){calendarMessage('Google sign-in did not complete: '+(response.error||'No access token'));return}rememberCalendarToken(response)},error_callback:()=>{connectCalendarButton.disabled=false;calendarMessage('Google sign-in was cancelled or blocked. Try again.')}});googleTokenClient.requestAccessToken({prompt:'consent'})}catch(error){connectCalendarButton.disabled=false;calendarMessage(error.message)}};
+disconnectCalendarButton.onclick=()=>{++calendarRequestId;const token=googleAccessToken;clearCalendarToken();if(token&&window.google?.accounts?.oauth2)google.accounts.oauth2.revoke(token,()=>{});calendarConnected(false);calendarEvents.replaceChildren();renderUpcoming();calendarMessage('Disconnected. Events were not saved on this website.')};
 refreshCalendarButton.onclick=()=>loadCalendarEvents();
 
 
@@ -279,7 +297,7 @@ healthConfirm.onclick=async()=>{
 };
 healthCancel.onclick=()=>{pendingHealthImport=null;healthConfirm.hidden=true;healthCancel.hidden=true;healthImportStatus.textContent='Import cancelled.'};
 
-trySilentCalendar();
+if(!restoreCalendarToken())trySilentCalendar();
 initCloud().catch(e=>cloudSay('Setup error: '+e.message))
 
 render();
