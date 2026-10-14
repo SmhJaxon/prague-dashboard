@@ -172,7 +172,7 @@ const healthCancel=document.getElementById('cancelHealthImport');
   // Remove health values from the visible URL/history immediately after reading.
   try{history.replaceState(null,'',location.pathname+location.hash)}catch{}
   const steps=Number(raw);
-  if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)||!Number.isInteger(steps)||steps<0||steps>150000||!Number.isFinite(Date.parse(date+'T12:00:00Z'))){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isInteger(steps)||steps<0||steps>150000||!Number.isFinite(Date.parse(date+'T12:00:00Z'))){
     healthImportStatus.textContent='The Shortcut link was invalid. Check the date and steps, then try again.';
     return;
   }
